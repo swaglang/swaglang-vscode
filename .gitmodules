@@ -1,0 +1,3 @@
+[submodule "swaglang"]
+	path = swaglang
+	url = https://github.com/swaglang/swaglang.git
