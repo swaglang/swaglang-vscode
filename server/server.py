@@ -16,7 +16,7 @@ from functools import reduce
 import operator
 
 import argparse
-from antlr4 import FileStream, CommonTokenStream
+from antlr4 import InputStream, CommonTokenStream
 # from compiler.ast.printer import print_ast
 from compiler.lexer.SwagLangLexer import SwagLangLexer
 from compiler.lexer.SwagLangParser import SwagLangParser
@@ -78,12 +78,10 @@ class SwaglangServer(LanguageServer):
         self.tokens: Dict[str, List[Token]] = {}
 
     def get_parser_results(self, document: TextDocument):
-        source = document.path
-
-        stream = FileStream(source, encoding="utf-8")
+        stream = InputStream(document.source)
 
         lexer = SwagLangLexer(stream)
-        error_listener = SwagErrorListener(source)
+        error_listener = SwagErrorListener(document.uri)
 
         lexer.removeErrorListeners()
         lexer.addErrorListener(error_listener)

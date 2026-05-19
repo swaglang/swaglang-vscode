@@ -3,7 +3,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'swaglang'))
 
 import argparse
-from antlr4 import FileStream, CommonTokenStream
+from antlr4 import InputStream, CommonTokenStream
 # from compiler.ast.printer import print_ast
 from compiler.lexer.SwagLangLexer import SwagLangLexer
 from compiler.lexer.SwagLangParser import SwagLangParser
@@ -34,16 +34,11 @@ class PublishDiagnosticServer(LanguageServer):
 
 
     def get_parser_errors(self, document: TextDocument):
-            source = document.path
-            # stream = FileStream(source, encoding="utf-8")
-            # with open(source, "r") as f:
-            # raise Exception(source)
-
-            stream = FileStream(source, encoding="utf-8")
+            stream = InputStream(document.source)
             lexer = SwagLangLexer(stream)
 
             lexer = SwagLangLexer(stream)
-            error_listener = SwagErrorListener(source)
+            error_listener = SwagErrorListener(document.uri)
 
             lexer.removeErrorListeners()
             lexer.addErrorListener(error_listener)
