@@ -608,6 +608,87 @@ def completion(
     return types.CompletionList(is_incomplete=False, items=items)
 
 
+def _active_param_index(line: str, char: int) -> int:
+    """Count commas at nesting depth 1 to find active parameter index."""
+    depth = 0
+    commas = 0
+    for i, ch in enumerate(line[:char]):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch == "," and depth == 1:
+            commas += 1
+    return commas
+
+
+def _func_name_before_paren(line: str, char: int) -> Optional[str]:
+    """Find the function name that opened the innermost unclosed '('."""
+    depth = 0
+    for i in range(char - 1, -1, -1):
+        ch = line[i]
+        if ch == ")":
+            depth += 1
+        elif ch == "(":
+            if depth == 0:
+                # scan backwards for identifier
+                j = i - 1
+                while j >= 0 and line[j] in " \t":
+                    j -= 1
+                end = j + 1
+                while j >= 0 and (line[j].isalnum() or line[j] == "_"):
+                    j -= 1
+                return line[j + 1:end] or None
+            depth -= 1
+    return None
+
+
+@server.feature(
+    types.TEXT_DOCUMENT_SIGNATURE_HELP,
+    types.SignatureHelpOptions(trigger_characters=["(", ","]),
+)
+def signature_help(
+    ls: SwaglangServer, params: types.SignatureHelpParams
+) -> Optional[types.SignatureHelp]:
+    doc = ls.workspace.get_text_document(params.text_document.uri)
+    symbols = ls.all_symbols.get(params.text_document.uri, {})
+
+    line_text = doc.lines[params.position.line]
+    char = params.position.character
+
+    func_name = _func_name_before_paren(line_text, char)
+    if not func_name:
+        return None
+
+    sym = symbols.get(func_name)
+    if sym is None or sym.kind != SymbolKind.FUNCTION:
+        return None
+    if not isinstance(sym.decl_node, FuncDecl):
+        return None
+
+    decl: FuncDecl = sym.decl_node
+    params_info = [
+        types.ParameterInformation(
+            label=f"{p.name}: {_fmt_type(p.type_ann)}"
+        )
+        for p in decl.params
+    ]
+
+    label = _fmt_func(sym)
+    sig = types.SignatureInformation(
+        label=label,
+        parameters=params_info,
+    )
+
+    active_param = _active_param_index(line_text, char)
+
+    return types.SignatureHelp(
+        signatures=[sig],
+        active_signature=0,
+        active_parameter=min(active_param, max(len(decl.params) - 1, 0)),
+    )
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     start_server(server)
