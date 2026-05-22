@@ -20,7 +20,7 @@ from compiler.lexer.SwagLangParser import SwagLangParser
 from compiler.ast.builder import ASTBuilder
 from compiler.errors.listener import SwagErrorListener
 from compiler.semantic.analyzer import SemanticAnalyzer
-from compiler.semantic.symbols import SymbolKind, SymbolTable
+from compiler.semantic.symbols import Symbol, SymbolKind
 from lsprotocol import types
 from pygls.cli import start_server
 from pygls.lsp.server import LanguageServer
@@ -49,7 +49,8 @@ ANTLR_TO_LSP: Dict[str, str] = {
     "WHILE": "keyword",
     "FOR": "keyword",
     "RETURN": "keyword",
-    "LET": "keyword", "ACCESS_MOD": "keyword",
+    "LET": "keyword",
+    "ACCESS_MOD": "keyword",
     "CONST": "keyword",
     "INTERFACE": "keyword",
     "EXTENDS": "keyword",
@@ -70,11 +71,11 @@ ANTLR_TO_LSP: Dict[str, str] = {
     "INT": "number",
     "FLOAT": "number",
     # identifiers (fallback — overridden per-token by symbol table)
-    "IDENT":      "variable",
-    "function":   "function",
-    "parameter":  "parameter",
-    "variable":   "variable",
-    "type":       "type",
+    "IDENT": "variable",
+    "function": "function",
+    "parameter": "parameter",
+    "variable": "variable",
+    "type": "type",
     # operators
     "ASSIGN": "operator",
     "ADD_ASSIGN": "operator",
@@ -122,24 +123,36 @@ class Token:
 
 
 _SYMBOL_KIND_TO_LSP: Dict[SymbolKind, str] = {
-    SymbolKind.FUNCTION:  "function",
+    SymbolKind.FUNCTION: "function",
     SymbolKind.PARAMETER: "parameter",
-    SymbolKind.VARIABLE:  "variable",
+    SymbolKind.VARIABLE: "variable",
     SymbolKind.INTERFACE: "type",
 }
 
 
-def _build_name_kind_map(symbol_table: SymbolTable) -> Dict[str, str]:
-    """Build a flat name → LSP token type map from all scopes.
-    Functions take priority so a local variable shadowing a function
-    name doesn't downgrade the function's color."""
-    result: Dict[str, str] = {}
-    for scope in symbol_table._scopes:  # type: ignore[attr-defined]
-        for name, sym in scope._symbols.items():  # type: ignore[attr-defined]
-            lsp_kind = _SYMBOL_KIND_TO_LSP.get(sym.kind, "variable")
-            if name not in result or lsp_kind == "function":
-                result[name] = lsp_kind
-    return result
+def _build_name_kind_map(snapshot: Dict[str, Symbol]) -> Dict[str, str]:
+    """Build a flat name - LSP token type map from the symbol snapshot."""
+    return {
+        name: _SYMBOL_KIND_TO_LSP.get(sym.kind, "variable")
+        for name, sym in snapshot.items()
+    }
+
+
+def _analyze_capturing(analyzer: SemanticAnalyzer, ast) -> tuple:
+    """Run semantic analysis while capturing every symbol at define-time,
+    before local scopes are popped."""
+    snapshot: Dict[str, Symbol] = {}
+    original_define = analyzer.symbols.define
+
+    def _capturing_define(symbol: Symbol) -> bool:
+        # Functions take priority over variables of the same name
+        if symbol.name not in snapshot or symbol.kind == SymbolKind.FUNCTION:
+            snapshot[symbol.name] = symbol
+        return original_define(symbol)
+
+    analyzer.symbols.define = _capturing_define
+    symbol_table, type_table, errors = analyzer.analyze(ast)
+    return symbol_table, type_table, errors, snapshot
 
 
 def _format_document(
@@ -181,6 +194,7 @@ class SwaglangServer(LanguageServer):
         self.parser_errors: list = []
         self._sem_errors: list = []
         self.tokens: Dict[str, List[Token]] = {}
+        self.all_symbols: Dict[str, Dict[str, Symbol]] = {}
 
     def get_parser_results(self, document: TextDocument):
         stream = InputStream(document.source)
@@ -212,12 +226,14 @@ class SwaglangServer(LanguageServer):
             symbolic = parser.symbolicNames[t.type]
             if symbolic == "IDENT" and name_kind:
                 symbolic = name_kind.get(t.text, "IDENT")
-            tokens.append(Token(
-                line=t.line,
-                offset=t.column,
-                text=t.text,
-                tok_type=symbolic,
-            ))
+            tokens.append(
+                Token(
+                    line=t.line,
+                    offset=t.column,
+                    text=t.text,
+                    tok_type=symbolic,
+                )
+            )
         return tokens
 
     def create_diagnostics(self, document: TextDocument) -> List[types.Diagnostic]:
@@ -244,7 +260,9 @@ class SwaglangServer(LanguageServer):
         return diagnostics
 
     def parse(self, document: TextDocument) -> None:
-        self.tree, token_stream, parser, self.parser_errors = self.get_parser_results(document)
+        self.tree, token_stream, parser, self.parser_errors = self.get_parser_results(
+            document
+        )
 
         name_kind: Optional[Dict[str, str]] = None
         sem_errors: list = []
@@ -252,17 +270,23 @@ class SwaglangServer(LanguageServer):
             ast = ASTBuilder().visit(self.tree)
             if ast is not None:
                 filename = document.filename or document.uri
-                symbol_table, _, sem_errors = SemanticAnalyzer(filename).analyze(ast)
-                name_kind = _build_name_kind_map(symbol_table)
+                analyzer = SemanticAnalyzer(filename)
+                symbol_table, _, sem_errors, snapshot = _analyze_capturing(
+                    analyzer, ast
+                )
+                name_kind = _build_name_kind_map(snapshot)
+                self.all_symbols[document.uri] = snapshot
 
         self._sem_errors = sem_errors
-        self.tokens[document.uri] = self._collect_tokens(token_stream, parser, name_kind)
+        self.tokens[document.uri] = self._collect_tokens(
+            token_stream, parser, name_kind
+        )
         self.diagnostics[document.uri] = (
             document.version,
             self.create_diagnostics(document),
         )
 
-    def report_server_error(self, error: Exception, source) -> None:  # type: ignore[override]
+    def report_server_error(self, error: Exception, source) -> None:
         self.window_show_message(
             types.ShowMessageParams(
                 message=f"Error in server: {error}",
@@ -366,6 +390,48 @@ def semantic_tokens_full(
         prev_offset = token.offset
 
     return types.SemanticTokens(data=data)
+
+
+def _word_at(document: TextDocument, position: types.Position) -> Optional[str]:
+    line = document.lines[position.line]
+    char = position.character
+    start = char
+    while start > 0 and (line[start - 1].isalnum() or line[start - 1] == "_"):
+        start -= 1
+    end = char
+    while end < len(line) and (line[end].isalnum() or line[end] == "_"):
+        end += 1
+    word = line[start:end]
+    return word if word else None
+
+
+@server.feature(types.TEXT_DOCUMENT_DEFINITION)
+def goto_definition(
+    ls: SwaglangServer, params: types.DefinitionParams
+) -> Optional[types.Location]:
+    doc = ls.workspace.get_text_document(params.text_document.uri)
+    symbols = ls.all_symbols.get(params.text_document.uri)
+    if symbols is None:
+        return None
+
+    word = _word_at(doc, params.position)
+    if not word:
+        return None
+
+    sym = symbols.get(word)
+    if sym is None or sym.decl_node is None:
+        return None
+
+    decl_line = sym.decl_node.line - 1
+    decl_col = sym.decl_node.col
+
+    return types.Location(
+        uri=params.text_document.uri,
+        range=types.Range(
+            start=types.Position(line=decl_line, character=decl_col),
+            end=types.Position(line=decl_line, character=decl_col + len(word)),
+        ),
+    )
 
 
 if __name__ == "__main__":
