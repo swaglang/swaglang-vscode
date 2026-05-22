@@ -457,7 +457,7 @@ def goto_definition(
         return None
 
     sym = symbols.get(word)
-    if sym is None or sym.decl_node is None:
+    if sym is None or sym.decl_node is None or sym.decl_node.line == 0:
         return None
 
     decl_line = sym.decl_node.line - 1
@@ -507,6 +507,44 @@ def hover(ls: SwaglangServer, params: types.HoverParams) -> Optional[types.Hover
             value=content,
         )
     )
+
+
+_SYMBOL_KIND_TO_LSP_KIND: Dict[SymbolKind, types.SymbolKind] = {
+    SymbolKind.FUNCTION:  types.SymbolKind.Function,
+    SymbolKind.VARIABLE:  types.SymbolKind.Variable,
+    SymbolKind.PARAMETER: types.SymbolKind.Variable,
+    SymbolKind.INTERFACE: types.SymbolKind.Interface,
+}
+
+
+@server.feature(types.TEXT_DOCUMENT_DOCUMENT_SYMBOL)
+def document_symbol(
+    ls: SwaglangServer, params: types.DocumentSymbolParams
+) -> List[types.SymbolInformation]:
+    symbols = ls.all_symbols.get(params.text_document.uri, {})
+    result: List[types.SymbolInformation] = []
+
+    for sym in symbols.values():
+        if sym.decl_node is None or sym.decl_node.line == 0:
+            continue
+        decl_line = sym.decl_node.line - 1
+        decl_col = sym.decl_node.col
+        lsp_kind = _SYMBOL_KIND_TO_LSP_KIND.get(sym.kind, types.SymbolKind.Variable)
+        result.append(
+            types.SymbolInformation(
+                name=sym.name,
+                kind=lsp_kind,
+                location=types.Location(
+                    uri=params.text_document.uri,
+                    range=types.Range(
+                        start=types.Position(line=decl_line, character=decl_col),
+                        end=types.Position(line=decl_line, character=decl_col + len(sym.name)),
+                    ),
+                ),
+            )
+        )
+
+    return result
 
 
 if __name__ == "__main__":
