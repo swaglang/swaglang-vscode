@@ -25,6 +25,13 @@
         "configuration": "./language-configuration.json"
       }
     ],
+    "grammars": [
+      {
+        "language": "swaglang",
+        "scopeName": "source.swag",
+        "path": "./syntaxes/swaglang.tmLanguage.json"
+      }
+    ],
     "configuration": {
       "title": "SwagLang",
       "properties": {
