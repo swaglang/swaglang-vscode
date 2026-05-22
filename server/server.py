@@ -175,8 +175,20 @@ def _fmt_type(t) -> str:
     return str(t)
 
 
+# Human-readable signatures for builtins
+# Update this when builtins.py changes
+_BUILTIN_DISPLAY: Dict[str, str] = {
+    "println": "fn println(value: any)",
+    "print":   "fn print(value: any)",
+    "len":     "fn len(value: string | T[] | set<T> | map<K,V>) -> int",
+}
+
+
 def _fmt_func(sym: Symbol) -> str:
     if not isinstance(sym.decl_node, FuncDecl):
+        display = _BUILTIN_DISPLAY.get(sym.name)
+        if display:
+            return display
         return f"fn {sym.name}(...)"
     decl: FuncDecl = sym.decl_node
     params = ", ".join(
