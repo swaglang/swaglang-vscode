@@ -1,9 +1,11 @@
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'swaglang'))
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "swaglang"))
 
 import argparse
 from antlr4 import InputStream, CommonTokenStream
+
 # from compiler.ast.printer import print_ast
 from compiler.lexer.SwagLangLexer import SwagLangLexer
 from compiler.lexer.SwagLangParser import SwagLangParser
@@ -26,32 +28,31 @@ from pygls.workspace import TextDocument
 
 ADDITION = re.compile(r"^\s*(\d+)\s*\+\s*(\d+)\s*=\s*(\d+)?\s*$")
 
-class PublishDiagnosticServer(LanguageServer):
 
+class PublishDiagnosticServer(LanguageServer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.diagnostics = {}
 
-
     def get_parser_errors(self, document: TextDocument):
-            stream = InputStream(document.source)
-            lexer = SwagLangLexer(stream)
+        stream = InputStream(document.source)
+        lexer = SwagLangLexer(stream)
 
-            lexer = SwagLangLexer(stream)
-            error_listener = SwagErrorListener(document.uri)
+        lexer = SwagLangLexer(stream)
+        error_listener = SwagErrorListener(document.uri)
 
-            lexer.removeErrorListeners()
-            lexer.addErrorListener(error_listener)
+        lexer.removeErrorListeners()
+        lexer.addErrorListener(error_listener)
 
-            tokens = CommonTokenStream(lexer)
-            parser = SwagLangParser(tokens)
+        tokens = CommonTokenStream(lexer)
+        parser = SwagLangParser(tokens)
 
-            parser.removeErrorListeners()
-            parser.addErrorListener(error_listener)
+        parser.removeErrorListeners()
+        parser.addErrorListener(error_listener)
 
-            tree = parser.prog()
+        tree = parser.prog()
 
-            return error_listener.errors, None if not error_listener.errors else []
+        return error_listener.errors, None if not error_listener.errors else []
 
     def create_diagnostics(self, document: TextDocument):
         diagnostics = []
@@ -59,7 +60,9 @@ class PublishDiagnosticServer(LanguageServer):
         sem_errors = []
         if tree:
             ast = ASTBuilder().visit(tree)
-            symbols, sem_types, sem_errors = SemanticAnalyzer(document.filename).analyze(ast)
+            symbols, sem_types, sem_errors = SemanticAnalyzer(
+                document.filename
+            ).analyze(ast)
 
         for error in parse_errors + sem_errors:
             severity = types.DiagnosticSeverity.Error
@@ -74,7 +77,9 @@ class PublishDiagnosticServer(LanguageServer):
                     severity=severity,
                     range=types.Range(
                         start=types.Position(line=line, character=0),
-                        end=types.Position(line=line, character=len(document.lines[line]) - 1),
+                        end=types.Position(
+                            line=line, character=len(document.lines[line]) - 1
+                        ),
                     ),
                 )
             )
@@ -112,13 +117,16 @@ class PublishDiagnosticServer(LanguageServer):
                 )
         return diagnostics
 
-
     def parse(self, document: TextDocument):
-        self.diagnostics[document.uri] = (document.version, self.create_diagnostics(document))
+        self.diagnostics[document.uri] = (
+            document.version,
+            self.create_diagnostics(document),
+        )
 
 
 server = PublishDiagnosticServer("diagnostic-server", "v1")
 DIAGNOSTICS_SERVER = server
+
 
 @server.feature(types.TEXT_DOCUMENT_DID_OPEN)
 def did_open(ls: PublishDiagnosticServer, params: types.DidOpenTextDocumentParams):

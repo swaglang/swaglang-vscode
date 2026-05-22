@@ -1,9 +1,11 @@
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'swaglang'))
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "swaglang"))
 
 import argparse
 from antlr4 import FileStream, CommonTokenStream
+
 # from compiler.ast.printer import print_ast
 from compiler.lexer.SwagLangLexer import SwagLangLexer
 from compiler.lexer.SwagLangParser import SwagLangParser
@@ -27,9 +29,9 @@ from pygls.lsp.server import LanguageServer
 from pygls.workspace import TextDocument
 
 
-
 server = LanguageServer("formatting-server", "v1")
 FORMATING_SERVER = server
+
 
 @server.feature(types.TEXT_DOCUMENT_FORMATTING)
 def format_document(ls: LanguageServer, params: types.DocumentFormattingParams):

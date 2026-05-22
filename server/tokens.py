@@ -1,6 +1,7 @@
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'swaglang'))
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "swaglang"))
 
 import enum
 import logging
@@ -26,6 +27,7 @@ class TokenModifier(enum.IntFlag):
     defaultLibrary = enum.auto()
     definition = enum.auto()
 
+
 @attrs.define
 class Token:
     line: int
@@ -35,8 +37,8 @@ class Token:
     tok_type: str = ""
     tok_modifiers: List[TokenModifier] = attrs.field(factory=list)
 
-class TokensServer(LanguageServer):
 
+class TokensServer(LanguageServer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.diagnostics = {}
@@ -70,7 +72,9 @@ class TokensServer(LanguageServer):
         sem_errors = []
         if tree and tree != []:
             ast = ASTBuilder().visit(tree)
-            symbols, sem_types, sem_errors = SemanticAnalyzer(document.filename).analyze(ast)
+            symbols, sem_types, sem_errors = SemanticAnalyzer(
+                document.filename
+            ).analyze(ast)
 
         for error in parse_errors + sem_errors:
             severity = types.DiagnosticSeverity.Error
@@ -85,7 +89,9 @@ class TokensServer(LanguageServer):
                     severity=severity,
                     range=types.Range(
                         start=types.Position(line=line, character=0),
-                        end=types.Position(line=line, character=len(document.lines[line]) - 1),
+                        end=types.Position(
+                            line=line, character=len(document.lines[line]) - 1
+                        ),
                     ),
                 )
             )
@@ -123,7 +129,6 @@ class TokensServer(LanguageServer):
                 )
         return diagnostics
 
-
     def format_tokens(self, inp_tokens, parser):
         tokens = []
         # i = 0
@@ -149,7 +154,10 @@ class TokensServer(LanguageServer):
     def parse(self, document: TextDocument):
         self.tree, tokens, self.parser_errors = self.get_parser_results(document)
         self.tokens[document.uri] = tokens
-        self.diagnostics[document.uri] = (document.version, self.create_diagnostics(document))
+        self.diagnostics[document.uri] = (
+            document.version,
+            self.create_diagnostics(document),
+        )
 
     def format_document(
         document: TextDocument, range_: Optional[types.Range] = None
@@ -187,7 +195,9 @@ class TokensServer(LanguageServer):
     Report error in server execution, not from language analysis
     """
 
-    def report_server_error(self, error: Exception, source: PyglsError | JsonRpcException):
+    def report_server_error(
+        self, error: Exception, source: PyglsError | JsonRpcException
+    ):
         self.window_show_message(
             types.ShowMessageParams(
                 message=f"Error in server: {error}",
@@ -222,8 +232,7 @@ def did_change(ls: TokensServer, params: types.DidOpenTextDocumentParams):
 
 """Tokens
 """
-need = ["keyword", "variable", "function",
-        "operator", "parameter", "type"]
+need = ["keyword", "variable", "function", "operator", "parameter", "type"]
 
 TokenTypes = TokensServer.symbolicNames
 
