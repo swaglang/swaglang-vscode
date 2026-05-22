@@ -182,6 +182,7 @@ _BUILTIN_DISPLAY: Dict[str, str] = {
     "print":   "fn print(value: any)",
     "len":     "fn len(value: string | T[] | set<T> | map<K,V>) -> int",
     "range":   "fn range(n: int) -> int[]\nfn range(start: int, end: int) -> int[]\nfn range(start: int, end: int, step: int) -> int[]",
+    "input":   "fn input(prompt: string) -> string",
 }
 
 
