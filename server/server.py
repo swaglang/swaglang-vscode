@@ -15,6 +15,7 @@ from compiler.lexer.SwagLangParser import SwagLangParser
 from compiler.ast.builder import ASTBuilder
 from compiler.errors.listener import SwagErrorListener
 from compiler.semantic.analyzer import SemanticAnalyzer
+from compiler.semantic.symbols import SymbolKind, SymbolTable
 from lsprotocol import types
 from pygls.cli import start_server
 from pygls.lsp.server import LanguageServer
@@ -63,8 +64,12 @@ ANTLR_TO_LSP: Dict[str, str] = {
     "STRING": "string",
     "INT": "number",
     "FLOAT": "number",
-    # identifiers
-    "IDENT": "variable",
+    # identifiers (fallback — overridden per-token by symbol table)
+    "IDENT":      "variable",
+    "function":   "function",
+    "parameter":  "parameter",
+    "variable":   "variable",
+    "type":       "type",
     # operators
     "ASSIGN": "operator",
     "ADD_ASSIGN": "operator",
@@ -111,6 +116,27 @@ class Token:
     tok_modifiers: List[TokenModifier] = attrs.field(factory=list)
 
 
+_SYMBOL_KIND_TO_LSP: Dict[SymbolKind, str] = {
+    SymbolKind.FUNCTION:  "function",
+    SymbolKind.PARAMETER: "parameter",
+    SymbolKind.VARIABLE:  "variable",
+    SymbolKind.INTERFACE: "type",
+}
+
+
+def _build_name_kind_map(symbol_table: SymbolTable) -> Dict[str, str]:
+    """Build a flat name → LSP token type map from all scopes.
+    Functions take priority so a local variable shadowing a function
+    name doesn't downgrade the function's color."""
+    result: Dict[str, str] = {}
+    for scope in symbol_table._scopes:  # type: ignore[attr-defined]
+        for name, sym in scope._symbols.items():  # type: ignore[attr-defined]
+            lsp_kind = _SYMBOL_KIND_TO_LSP.get(sym.kind, "variable")
+            if name not in result or lsp_kind == "function":
+                result[name] = lsp_kind
+    return result
+
+
 def _format_document(
     document: TextDocument, range_: Optional[types.Range] = None
 ) -> List[types.TextEdit]:
@@ -148,6 +174,7 @@ class SwaglangServer(LanguageServer):
         self.diagnostics: Dict[str, tuple] = {}
         self.tree = None
         self.parser_errors: list = []
+        self._sem_errors: list = []
         self.tokens: Dict[str, List[Token]] = {}
 
     def get_parser_results(self, document: TextDocument):
@@ -164,35 +191,34 @@ class SwaglangServer(LanguageServer):
         parser.addErrorListener(error_listener)
 
         tree = parser.prog()
-        tokens = self._collect_tokens(token_stream, parser)
 
         if error_listener.errors:
-            return None, tokens, error_listener.errors
-        return tree, tokens, []
+            return None, token_stream, parser, error_listener.errors
+        return tree, token_stream, parser, []
 
-    def _collect_tokens(self, token_stream: CommonTokenStream, parser) -> List[Token]:
+    def _collect_tokens(
+        self,
+        token_stream: CommonTokenStream,
+        parser,
+        name_kind: Optional[Dict[str, str]] = None,
+    ) -> List[Token]:
         tokens = []
         for t in token_stream.tokens:
-            tokens.append(
-                Token(
-                    line=t.line,
-                    offset=t.column,
-                    text=t.text,
-                    tok_type=parser.symbolicNames[t.type],
-                )
-            )
+            symbolic = parser.symbolicNames[t.type]
+            if symbolic == "IDENT" and name_kind:
+                symbolic = name_kind.get(t.text, "IDENT")
+            tokens.append(Token(
+                line=t.line,
+                offset=t.column,
+                text=t.text,
+                tok_type=symbolic,
+            ))
         return tokens
 
     def create_diagnostics(self, document: TextDocument) -> List[types.Diagnostic]:
         diagnostics = []
         parse_errors = self.parser_errors or []
-        sem_errors: list = []
-
-        if self.tree is not None:
-            ast = ASTBuilder().visit(self.tree)
-            if ast is not None:
-                filename = document.filename or document.uri
-                _, _, sem_errors = SemanticAnalyzer(filename).analyze(ast)
+        sem_errors: list = getattr(self, "_sem_errors", [])
 
         for error in parse_errors + sem_errors:
             line = error.line
@@ -213,8 +239,19 @@ class SwaglangServer(LanguageServer):
         return diagnostics
 
     def parse(self, document: TextDocument) -> None:
-        self.tree, tokens, self.parser_errors = self.get_parser_results(document)
-        self.tokens[document.uri] = tokens
+        self.tree, token_stream, parser, self.parser_errors = self.get_parser_results(document)
+
+        name_kind: Optional[Dict[str, str]] = None
+        sem_errors: list = []
+        if self.tree is not None:
+            ast = ASTBuilder().visit(self.tree)
+            if ast is not None:
+                filename = document.filename or document.uri
+                symbol_table, _, sem_errors = SemanticAnalyzer(filename).analyze(ast)
+                name_kind = _build_name_kind_map(symbol_table)
+
+        self._sem_errors = sem_errors
+        self.tokens[document.uri] = self._collect_tokens(token_stream, parser, name_kind)
         self.diagnostics[document.uri] = (
             document.version,
             self.create_diagnostics(document),
