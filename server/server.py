@@ -547,6 +547,67 @@ def document_symbol(
     return result
 
 
+_KEYWORDS = [
+    "if", "else", "while", "for", "do", "in", "break", "continue",
+    "return", "defer", "interface", "extends", "void", "let", "const",
+    "true", "false", "null", "map", "set", "int", "float", "string",
+    "bool", "error",
+]
+
+_SYMBOL_KIND_TO_COMPLETION_KIND: Dict[SymbolKind, types.CompletionItemKind] = {
+    SymbolKind.FUNCTION:  types.CompletionItemKind.Function,
+    SymbolKind.VARIABLE:  types.CompletionItemKind.Variable,
+    SymbolKind.PARAMETER: types.CompletionItemKind.Variable,
+    SymbolKind.INTERFACE: types.CompletionItemKind.Interface,
+}
+
+
+@server.feature(
+    types.TEXT_DOCUMENT_COMPLETION,
+    types.CompletionOptions(trigger_characters=["."]),
+)
+def completion(
+    ls: SwaglangServer, params: types.CompletionParams
+) -> types.CompletionList:
+    doc = ls.workspace.get_text_document(params.text_document.uri)
+    symbols = ls.all_symbols.get(params.text_document.uri, {})
+
+    word = _word_at(doc, params.position) or ""
+    items: List[types.CompletionItem] = []
+
+    # Symbol completions
+    for name, sym in symbols.items():
+        if word and not name.startswith(word):
+            continue
+        kind = _SYMBOL_KIND_TO_COMPLETION_KIND.get(sym.kind, types.CompletionItemKind.Variable)
+        if sym.kind == SymbolKind.FUNCTION:
+            detail = _fmt_func(sym)
+        elif sym.kind == SymbolKind.INTERFACE:
+            detail = f"interface {name}"
+        else:
+            detail = f"{name}: {_fmt_type(sym.type)}"
+        items.append(
+            types.CompletionItem(  # type: ignore[call-arg]
+                label=name,
+                kind=kind,
+                detail=detail,
+            )
+        )
+
+    # Keyword completions
+    for kw in _KEYWORDS:
+        if word and not kw.startswith(word):
+            continue
+        items.append(
+            types.CompletionItem(  # type: ignore[call-arg]
+                label=kw,
+                kind=types.CompletionItemKind.Keyword,
+            )
+        )
+
+    return types.CompletionList(is_incomplete=False, items=items)
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     start_server(server)
