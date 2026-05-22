@@ -20,6 +20,10 @@ from compiler.lexer.SwagLangParser import SwagLangParser
 from compiler.ast.builder import ASTBuilder
 from compiler.errors.listener import SwagErrorListener
 from compiler.semantic.analyzer import SemanticAnalyzer
+from compiler.ast.nodes import (
+    ArrayType, BaseType, FuncDecl, MapType, MultiReturnType,
+    SetType, SingleReturnType, UserType, VoidReturnType,
+)
 from compiler.semantic.symbols import Symbol, SymbolKind
 from lsprotocol import types
 from pygls.cli import start_server
@@ -153,6 +157,40 @@ def _analyze_capturing(analyzer: SemanticAnalyzer, ast) -> tuple:
     analyzer.symbols.define = _capturing_define
     symbol_table, type_table, errors = analyzer.analyze(ast)
     return symbol_table, type_table, errors, snapshot
+
+
+def _fmt_type(t) -> str:
+    if t is None:
+        return "unknown"
+    if isinstance(t, BaseType):
+        return t.value
+    if isinstance(t, UserType):
+        return t.name
+    if isinstance(t, ArrayType):
+        return f"{_fmt_type(t.element)}[]"
+    if isinstance(t, MapType):
+        return f"map<{_fmt_type(t.key)}, {_fmt_type(t.value)}>"
+    if isinstance(t, SetType):
+        return f"set<{_fmt_type(t.element)}>"
+    return str(t)
+
+
+def _fmt_func(sym: Symbol) -> str:
+    if not isinstance(sym.decl_node, FuncDecl):
+        return f"fn {sym.name}(...)"
+    decl: FuncDecl = sym.decl_node
+    params = ", ".join(
+        f"{p.name}: {_fmt_type(p.type_ann)}" for p in decl.params
+    )
+    if isinstance(decl.return_type, VoidReturnType):
+        ret = ""
+    elif isinstance(decl.return_type, SingleReturnType):
+        ret = f" -> {_fmt_type(decl.return_type.type_ann)}"
+    elif isinstance(decl.return_type, MultiReturnType):
+        ret = " -> (" + ", ".join(_fmt_type(t) for t in decl.return_type.types) + ")"
+    else:
+        ret = ""
+    return f"fn {sym.name}({params}){ret}"
 
 
 def _format_document(
@@ -431,6 +469,43 @@ def goto_definition(
             start=types.Position(line=decl_line, character=decl_col),
             end=types.Position(line=decl_line, character=decl_col + len(word)),
         ),
+    )
+
+
+@server.feature(types.TEXT_DOCUMENT_HOVER)
+def hover(ls: SwaglangServer, params: types.HoverParams) -> Optional[types.Hover]:
+    doc = ls.workspace.get_text_document(params.text_document.uri)
+    symbols = ls.all_symbols.get(params.text_document.uri)
+    if symbols is None:
+        return None
+
+    word = _word_at(doc, params.position)
+    if not word:
+        return None
+
+    sym = symbols.get(word)
+    if sym is None:
+        return None
+
+    kind_label = sym.kind.value  # "function" | "variable" | "parameter" | "interface"
+    mut = "" if sym.kind in (SymbolKind.FUNCTION, SymbolKind.INTERFACE) else (
+        "let " if sym.is_mutable else "const "
+    )
+
+    if sym.kind == SymbolKind.FUNCTION:
+        type_str = _fmt_func(sym)
+    elif sym.kind == SymbolKind.INTERFACE:
+        type_str = f"interface {sym.name}"
+    else:
+        type_str = f"{mut}{sym.name}: {_fmt_type(sym.type)}"
+
+    content = f"```swaglang\n{type_str}\n```\n*{kind_label}*"
+
+    return types.Hover(
+        contents=types.MarkupContent(
+            kind=types.MarkupKind.Markdown,
+            value=content,
+        )
     )
 
 
