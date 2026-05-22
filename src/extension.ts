@@ -48,9 +48,6 @@ export function activate(context: ExtensionContext) {
 
     const clientOptions: LanguageClientOptions = {
         documentSelector: [{ scheme: 'file', language: 'swaglang' }],
-        synchronize: {
-            fileEvents: workspace.createFileSystemWatcher('**/*.swag'),
-        },
     };
 
     client = new LanguageClient(
