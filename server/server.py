@@ -1,6 +1,7 @@
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'swaglang'))
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "swaglang"))
 
 import random
 
@@ -17,6 +18,7 @@ import operator
 
 import argparse
 from antlr4 import InputStream, CommonTokenStream
+
 # from compiler.ast.printer import print_ast
 from compiler.lexer.SwagLangLexer import SwagLangLexer
 from compiler.lexer.SwagLangParser import SwagLangParser
@@ -52,6 +54,71 @@ DIAGNOSTICS AND INIT
 """
 
 ADDITION = re.compile(r"^\s*(\d+)\s*\+\s*(\d+)\s*=\s*(\d+)?\s*$")
+TOKEN_TYPES = [
+    "keyword",
+    "type",
+    "variable",
+    "function",
+    "operator",
+    "string",
+    "number",
+    "comment",
+    "parameter",
+]
+TOKEN_TYPE_INDEX = {t: i for i, t in enumerate(TOKEN_TYPES)}
+ANTLR_TO_LSP = {
+    # keywords
+    "IF": "keyword",
+    "ELSE": "keyword",
+    "WHILE": "keyword",
+    "FOR": "keyword",
+    "RETURN": "keyword",
+    "LET": "keyword",
+    "CONST": "keyword",
+    "INTERFACE": "keyword",
+    "EXTENDS": "keyword",
+    "DO": "keyword",
+    "BREAK": "keyword",
+    "CONTINUE": "keyword",
+    "DEFER": "keyword",
+    "IN": "keyword",
+    "VOID": "keyword",
+    # types
+    "TYPE": "type",
+    "MAP": "type",
+    "SET": "type",
+    # literals
+    "STRING": "string",
+    "INT": "number",
+    "FLOAT": "number",
+    "BOOL": "keyword",
+    "NULL": "keyword",
+    # identifiers
+    "IDENT": "variable",
+    # operators
+    "ASSIGN": "operator",
+    "ADD_ASSIGN": "operator",
+    "EQ": "operator",
+    "NEQ": "operator",
+    "LT": "operator",
+    "GT": "operator",
+    "LTE": "operator",
+    "GTE": "operator",
+    "PLUS": "operator",
+    "MINUS": "operator",
+    "MUL": "operator",
+    "DIV": "operator",
+    "MOD": "operator",
+    "EXP": "operator",
+    "AND": "operator",
+    "OR": "operator",
+    "NOT": "operator",
+    "INC": "operator",
+    "DEC": "operator",
+    # comments
+    "COMMENT": "comment",
+    "INLINE_COMMENT": "comment",
+}
 
 
 class TokenModifier(enum.IntFlag):
@@ -59,6 +126,7 @@ class TokenModifier(enum.IntFlag):
     readonly = enum.auto()
     defaultLibrary = enum.auto()
     definition = enum.auto()
+
 
 @attrs.define
 class Token:
@@ -69,8 +137,8 @@ class Token:
     tok_type: str = ""
     tok_modifiers: List[TokenModifier] = attrs.field(factory=list)
 
-class SwaglangServer(LanguageServer):
 
+class SwaglangServer(LanguageServer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.diagnostics = {}
@@ -102,7 +170,9 @@ class SwaglangServer(LanguageServer):
         sem_errors = []
         if tree and tree != []:
             ast = ASTBuilder().visit(tree)
-            symbols, sem_types, sem_errors = SemanticAnalyzer(document.filename).analyze(ast)
+            symbols, sem_types, sem_errors = SemanticAnalyzer(
+                document.filename
+            ).analyze(ast)
 
         for error in parse_errors + sem_errors:
             severity = types.DiagnosticSeverity.Error
@@ -117,7 +187,9 @@ class SwaglangServer(LanguageServer):
                     severity=severity,
                     range=types.Range(
                         start=types.Position(line=line, character=0),
-                        end=types.Position(line=line, character=len(document.lines[line]) - 1),
+                        end=types.Position(
+                            line=line, character=len(document.lines[line]) - 1
+                        ),
                     ),
                 )
             )
@@ -155,7 +227,6 @@ class SwaglangServer(LanguageServer):
                 )
         return diagnostics
 
-
     def format_tokens(self, inp_tokens, parser):
         tokens = []
         # i = 0
@@ -181,7 +252,10 @@ class SwaglangServer(LanguageServer):
     def parse(self, document: TextDocument):
         self.tree, tokens, self.parser_errors = self.get_parser_results(document)
         self.tokens[document.uri] = tokens
-        self.diagnostics[document.uri] = (document.version, self.create_diagnostics(document))
+        self.diagnostics[document.uri] = (
+            document.version,
+            self.create_diagnostics(document),
+        )
 
     def format_document(
         document: TextDocument, range_: Optional[types.Range] = None
@@ -219,7 +293,9 @@ class SwaglangServer(LanguageServer):
     Report error in server execution, not from language analysis
     """
 
-    def report_server_error(self, error: Exception, source: PyglsError | JsonRpcException):
+    def report_server_error(
+        self, error: Exception, source: PyglsError | JsonRpcException
+    ):
         self.window_show_message(
             types.ShowMessageParams(
                 message=f"Error in server: {error}",
@@ -314,39 +390,42 @@ def format_on_type(ls: LanguageServer, params: types.DocumentOnTypeFormattingPar
     return ls.format_document(doc)
 
 
-"""Tokens
-"""
-need = ["keyword", "variable", "function",
-        "operator", "parameter", "type"]
-
-TokenTypes = SwagLangParser.symbolicNames
+"""Tokens"""
 
 
 @server.feature(
     types.TEXT_DOCUMENT_SEMANTIC_TOKENS_FULL,
     types.SemanticTokensLegend(
-        token_types=TokenTypes,
-        token_modifiers=[m.name for m in TokenModifier],
+        token_types=TOKEN_TYPES,
+        token_modifiers=[m.name for m in TokenModifier if m.name is not None],
     ),
 )
-def semantic_tokens_full(ls: SwaglangServer, params: types.SemanticTokensParams):
+def semantic_tokens_full(ls: SwaglangServer, params):
     data = []
     tokens = ls.tokens.get(params.text_document.uri, [])
+    prev_line, prev_offset = 1, 0
 
     for token in tokens:
+        lsp_type = ANTLR_TO_LSP.get(token.tok_type)
+        if lsp_type is None:
+            continue
+
+        delta_line = token.line - prev_line
+        delta_char = token.offset if delta_line > 0 else token.offset - prev_offset
+
         data.extend(
             [
-                token.line,
-                token.offset,
+                delta_line,
+                delta_char,
                 len(token.text),
-                random.choice(need),
-                # TokenTypes.index(token.tok_type)
-                reduce(operator.or_, token.tok_modifiers, 0),
+                TOKEN_TYPE_INDEX[lsp_type],
+                0,  # no modifiers for now
             ]
         )
-    # raise Exception(data)
-    return types.SemanticTokens(data=data)
+        prev_line = token.line
+        prev_offset = token.offset
 
+    return types.SemanticTokens(data=data)
 
 
 """
