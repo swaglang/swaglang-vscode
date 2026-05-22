@@ -29,7 +29,7 @@ class PublishDiagnosticServer(LanguageServer):
     def get_parser_errors(self, document: TextDocument):
         stream = InputStream(document.source)
         lexer = SwagLangLexer(stream)
-        error_listener = SwagErrorListener(document.uri)
+        error_listener = SwagErrorListener(document.filename or document.uri)
 
         lexer.removeErrorListeners()
         lexer.addErrorListener(error_listener)
@@ -57,9 +57,8 @@ class PublishDiagnosticServer(LanguageServer):
                 _, _, sem_errors = SemanticAnalyzer(filename).analyze(ast)
 
         for error in parse_errors + sem_errors:
-            line = error.line
-            # TODO: solve why line number can be outside our document range
-            if line >= len(document.lines):
+            line = error.line - 1  # ANTLR is 1-based, LSP is 0-based
+            if line < 0 or line >= len(document.lines):
                 continue
 
             diagnostics.append(

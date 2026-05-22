@@ -3,6 +3,11 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "swaglang"))
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
+
 import enum
 import logging
 import re
@@ -44,7 +49,7 @@ ANTLR_TO_LSP: Dict[str, str] = {
     "WHILE": "keyword",
     "FOR": "keyword",
     "RETURN": "keyword",
-    "LET": "keyword",
+    "LET": "keyword", "ACCESS_MOD": "keyword",
     "CONST": "keyword",
     "INTERFACE": "keyword",
     "EXTENDS": "keyword",
@@ -181,7 +186,7 @@ class SwaglangServer(LanguageServer):
         stream = InputStream(document.source)
 
         lexer = SwagLangLexer(stream)
-        error_listener = SwagErrorListener(document.uri)
+        error_listener = SwagErrorListener(document.filename or document.uri)
         lexer.removeErrorListeners()
         lexer.addErrorListener(error_listener)
 
@@ -221,8 +226,8 @@ class SwaglangServer(LanguageServer):
         sem_errors: list = getattr(self, "_sem_errors", [])
 
         for error in parse_errors + sem_errors:
-            line = error.line
-            if line >= len(document.lines):
+            line = error.line - 1  # ANTLR is 1-based, LSP is 0-based
+            if line < 0 or line >= len(document.lines):
                 continue
             diagnostics.append(
                 types.Diagnostic(
